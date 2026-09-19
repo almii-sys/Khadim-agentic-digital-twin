@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+env/
+.pytest_cache/
+
+# Mock / real databases — regenerate via seed scripts, never commit data
+*.db
+*.sqlite3
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Node / mobile (React Native / Flutter build artifacts)
+node_modules/
+build/
+dist/
+.expo/
+*.apk
+*.ipa
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Logs
+*.log
