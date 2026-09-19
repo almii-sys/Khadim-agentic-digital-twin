@@ -59,11 +59,27 @@ def load_from_cms():
     cur.execute("SELECT id, sap_id, program_id FROM students WHERE status != 'WITHDRAWN'")
     students = cur.fetchall()
 
+    # Each student's ACTUAL current-semester course codes — this is what
+    # makes the two mock DBs agree with each other. Without this, UniTime
+    # enrollments would be sampled at random and wouldn't match what the
+    # CMS says the student is actually taking this term.
+    cur.execute("""
+        SELECT s.sap_id, c.code
+        FROM enrollments e
+        JOIN students s ON e.student_id = s.id
+        JOIN courses c ON e.course_id = c.id
+        JOIN semesters sem ON e.semester_id = sem.id
+        WHERE sem.is_current = 1
+    """)
+    current_enrollments_by_sap_id = {}
+    for row in cur.fetchall():
+        current_enrollments_by_sap_id.setdefault(row["sap_id"], []).append(row["code"])
+
     conn.close()
-    return departments, courses, faculty_by_id, students
+    return departments, courses, faculty_by_id, students, current_enrollments_by_sap_id
 
 
-def build(session, departments, courses, faculty_by_id, students):
+def build(session, departments, courses, faculty_by_id, students, current_enrollments_by_sap_id):
     # ---- Academic session (current term only, keeps this focused) ----
     sess = AcademicSession(label="Fall 2026", academic_year="2026-2027", is_current=True)
     session.add(sess)
@@ -140,19 +156,15 @@ def build(session, departments, courses, faculty_by_id, students):
 
     session.flush()
 
-    # ---- Student class enrollments — approximate: each student enrolled in
-    # ~3 sections drawn from their department's course offerings ----
-    dept_courses = {}
-    for course in courses:
-        dept_courses.setdefault(course["department_id"], []).append(course["code"])
-
+    # ---- Student class enrollments — MUST match each student's actual
+    # current-semester CMS enrollments (current_enrollments_by_sap_id), not
+    # a random sample. This is what lets get_class_schedule() correctly
+    # disambiguate between look-alike sections (e.g. a Semester-1 DBMS
+    # section vs a Semester-4 DBMS section) by following the student's own
+    # enrollment record instead of guessing from the course title. ----
     for student in students:
-        # figure out department via program -> department isn't directly in the
-        # `students` row we pulled, so just sample from all courses lightly
-        # weighted toward variety; good enough for mock scheduling data.
-        eligible_codes = [c["code"] for c in courses]
-        picks = random.sample(eligible_codes, k=min(3, len(eligible_codes)))
-        for code in picks:
+        codes_this_term = current_enrollments_by_sap_id.get(student["sap_id"], [])
+        for code in codes_this_term:
             classes = class_by_course_code.get(code)
             if not classes:
                 continue
@@ -177,7 +189,7 @@ def main():
     parser.add_argument("--reset", action="store_true")
     args = parser.parse_args()
 
-    departments, courses, faculty_by_id, students = load_from_cms()
+    departments, courses, faculty_by_id, students, current_enrollments_by_sap_id = load_from_cms()
 
     engine = create_engine(UNITIME_DB_PATH)
     if args.reset:
@@ -186,7 +198,7 @@ def main():
 
     Session = sessionmaker(bind=engine)
     session = Session()
-    build(session, departments, courses, faculty_by_id, students)
+    build(session, departments, courses, faculty_by_id, students, current_enrollments_by_sap_id)
     session.close()
 
     print(f"Seeded {UNITIME_DB_PATH} — {len(courses)} offerings scheduled across "
